@@ -8,4 +8,12 @@ import {
   TURTLE,
 } from './lib/outputs.js'
 
-export { getAssets, toString, toStream, toFile, TURTLE, TRIG, N_TRIPLES }
+export {
+  getAssets,
+  toString,
+  toStream,
+  toFile,
+  TURTLE,
+  TRIG,
+  N_TRIPLES,
+}
