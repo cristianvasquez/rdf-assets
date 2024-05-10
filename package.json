@@ -11,6 +11,9 @@
     "index.js",
     "lib/**/*.js"
   ],
+  "scripts": {
+    "test": "echo \"no tests! Waw\""
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cristianvasquez/rdf-assets.git"
