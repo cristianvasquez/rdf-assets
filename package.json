@@ -29,6 +29,8 @@
     "@rdfjs/formats": "^4.0.0",
     "get-stream": "^9.0.1",
     "glob": "^10.3.14",
-    "rdf-ext": "^2.5.1"
+    "oxigraph": "^0.4.0-alpha.6",
+    "rdf-ext": "^2.5.1",
+    "sparqljs": "^3.7.1"
   }
 }

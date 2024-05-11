@@ -7,9 +7,8 @@
   <foaf:Person rdf:about="Alice">
     <foaf:name>Alice</foaf:name>
     <foaf:knows>
-      <rdf:Description rdf:about="Bob">
-        <foaf:name>Bob</foaf:name>
-      </rdf:Description>
+        <foaf:Person rdf:about="Bob">
+        </foaf:Person>
     </foaf:knows>
   </foaf:Person>
 
