@@ -19,7 +19,8 @@ const rows = doSelect({ store, query })
 console.log(rows)
 
 /**
- * Outputs
+ * Outputs:
+ *
  [
    {
      s: NamedNode { value: 'http://example.org/Alice' },

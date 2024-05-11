@@ -5,7 +5,7 @@ import {
   prettyPrintTurtle,
 } from '../index.js'
 
-const assets = await getAssets({ globPattern: './examples/**/*' })
+const assets = await getAssets({ globPattern: './examples/**/*.{ttl,rdf}' })
 
 const store = await createTriplestore({ assets })
 
@@ -28,6 +28,8 @@ const str = await prettyPrintTurtle({ dataset })
 console.log(str)
 
 /**
+ * Outputs:
+ *
  * <http://example.org/Alice> a <http://xmlns.com/foaf/0.1/Person> ;
  *         <http://xmlns.com/foaf/0.1/knows> <http://example.org/Bob> ;
  *         <http://xmlns.com/foaf/0.1/name> "Alice" .
