@@ -1,6 +1,12 @@
 # rdf-assets
 
+A bunch of utilities to inspect RDF files, a wrapper.
+
+## Examples
+
 Say you have a bunch of RDF files in various formats scattered throughout a directory tree.
+
+### Bundle in TRIG
 
 Then you can gather and bundle these files into TRIG format by utilizing
 a [glob pattern](https://en.wikipedia.org/wiki/Glob_(programming)).
@@ -14,6 +20,8 @@ const assets = await getAssets({ globPattern: './examples/data/**/*' })
 
 await toFile(assets, 'bundle.trig', { format: TRIG, prefixes })
 ```
+
+### Do SPARQL SELECT
 
 Or you can use SPARQL to query these files:
 
@@ -53,6 +61,8 @@ console.log(rows)
  */
 
 ```
+
+### Do SPARQL CONSTRUCT
 
 Or display the results of a CONSTRUCT serialized in turtle
 
