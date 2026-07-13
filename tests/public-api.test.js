@@ -9,6 +9,7 @@ test('public api exposes namespace exports', () => {
   assert.equal(typeof transforms.materialize, 'function')
   assert.equal(typeof transforms.select, 'function')
   assert.equal(typeof transforms.skolemize, 'function')
+  assert.equal(typeof sinks.triplify, 'function')
   assert.equal(typeof sinks.datasetToString, 'function')
   assert.equal(typeof pipeline.pipe, 'function')
   assert.equal(typeof pipeline.requireConformance, 'function')
@@ -19,6 +20,11 @@ test('public api does not expose top-level pipeline components', async () => {
   assert.equal('readFromGlob' in api, false)
   assert.equal('assignGraph' in api, false)
   assert.equal('NQUADS' in api, false)
+})
+
+test('public api exposes a dedicated triplify entry point', async () => {
+  const { triplify } = await import('rdf-cli/triplify')
+  assert.equal(typeof triplify, 'function')
 })
 
 test('public api supports composed pipeline usage', async () => {

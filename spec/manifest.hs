@@ -390,6 +390,7 @@ toReadable      :: Stream a -> Stream a          -- ^ idempotent coercion to a R
 writeQuads      :: QuadStream -> MimeType -> IO ()          -- ^ default MimeType = nquads.
 
 loadPrefixes    :: Maybe FilePath -> IO Prefixes           -- ^ discovers .prefixes.json / prefixes.json.
+triplify        :: Dataset -> Prefixes -> IO Text -- ^ pretty TriG, falling back to Turtle when graphless.
 datasetToString :: Dataset -> MimeType -> Prefixes -> IO Text
 -- | Default format = trig. nquads/ntriples delegate to 'writeQuads' (ntriples drops graphs).
 writePretty     :: QuadStream -> MimeType -> Prefixes -> IO ()
@@ -629,6 +630,7 @@ formatMarkdownReport = manifestOnly
 toReadable = manifestOnly
 writeQuads = manifestOnly
 loadPrefixes = manifestOnly
+triplify = manifestOnly
 datasetToString = manifestOnly
 writePretty = manifestOnly
 bindingToJSONL = manifestOnly

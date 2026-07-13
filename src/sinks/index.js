@@ -5,6 +5,7 @@ export {
   TRIG,
   TURTLE,
   loadPrefixes,
+  triplify,
   datasetToString,
   writePretty,
 } from './pretty.js'
