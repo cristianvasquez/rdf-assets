@@ -1,7 +1,7 @@
 export { assignGraph } from './assignGraph.js'
 export { dropGraph } from './dropGraph.js'
 export { DEFAULT_SKOLEM_BASE_IRI, skolemize } from './skolem.js'
-export { materialize, storeToDataset, construct, select } from './sparql.js'
+export { materialize, storeToDataset, construct, chainConstructs, select } from './sparql.js'
 export { resolveBuiltinShapes, validate, formatMarkdownReport } from './shacl.js'
 export { claim } from './claim.js'
 export { loadClaimer, applyClaimer, emitClaimer, sourceGraphOf, frontierGraphOf } from './claimer.js'

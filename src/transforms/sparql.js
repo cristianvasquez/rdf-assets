@@ -87,3 +87,26 @@ export function construct (store, query) {
 export function select (store, query) {
   return selectBindings(store, query)
 }
+
+// Sequential CONSTRUCT pipeline (spec/manifest.hs: 'chainConstructs') — the
+// Kleisli-composition monoid, and the DIFFERENT operation from a claimer's
+// view fan-out ('runViews' is traverse in a commuting applicative). Order is
+// significant and step n+1 sees ONLY step n's output, so a step that wants to
+// keep something has to re-emit it. That is the whole boundary: what one step
+// hands the next is exactly what it CONSTRUCTs, nothing implicit.
+//
+// The spec declared this unimplemented because the CLI already covers it by
+// piping `rdf construct`. In-process there is no pipe, so the library needs
+// it: it is what lets one derivation be computed once and then USED, instead
+// of being repeated at every site that needs it.
+//
+// Each step gets a fresh store because a step's output replaces its input; an
+// empty chain is the identity.
+export async function chainConstructs (queries, quads) {
+  let current = quads
+  for (const query of queries) {
+    const store = await materialize(current)
+    current = construct(store, query)
+  }
+  return current
+}

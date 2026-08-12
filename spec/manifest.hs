@@ -198,11 +198,16 @@ construct   :: Store -> Query -> QuadStream      -- ^ output graphless (engine c
 -- navigation read (e.g. rdf:type) — which feeds the views but stays graphless
 -- in the rest, so shared navigation vocabulary never starves later claimers.
 --
--- Views do not fold: every view reads the SAME claimed set, independently —
--- order-insensitive, parallelizable, each naming its own output graph. The
--- claim boundary is explicit: 'projectView' seeds each view from
--- 'ClaimedSet c', never from the whole working set. ('chainConstructs' below
--- is the different, sequential operation.)
+-- Views do not fold INTO EACH OTHER: every view reads the SAME claimed set,
+-- independently — order-insensitive, parallelizable, each naming its own
+-- output graph. The claim boundary is explicit: 'projectView' seeds each view
+-- from 'ClaimedSet c', never from the whole working set.
+--
+-- A view's OWN queries are the other operation: 'chainConstructs', a sequence
+-- in which step n+1 sees only step n's output. The two compose without either
+-- law giving way, because the chain is contained inside one view — views still
+-- commute with each other. That containment is what lets a derivation be
+-- computed once and then used, without any view learning about another's.
 --
 -- How to read the phantom @c@: it names one claim rule at the type level, so
 -- quads claimed by that rule cannot be confused with another rule's quads in
@@ -258,29 +263,41 @@ viewFeed      :: ClaimedSet c -> FrontierSet c -> ViewFeed c
 feedToDataset :: ViewFeed c -> Dataset
 asProjected   :: Dataset -> ProjectedSet
 
--- | One named aspect of a claimer: a CONSTRUCT and the graph its output
--- lands in. Naming the output is what lets several views coexist.
+-- | One named aspect of a claimer: a CHAIN of CONSTRUCTs and the graph its
+-- output lands in. Naming the output is what lets several views coexist.
+--
+-- Non-empty by construction in the document syntax: @cascade:query@ gives one
+-- query, @cascade:queries@ an RDF list of them. A list because order is
+-- significant here and an RDF list is the only ordered structure available —
+-- repeating a single-valued predicate would lose it.
 data View = View
-  { viewGraph :: Iri
-  , viewQuery :: Construct
+  { viewGraph   :: Iri
+  , viewQueries :: [Construct]
   }
 
 -- Law (fan-out): 'runViews' is 'traverse' over the views, and its effects
 -- COMMUTE — every view reads the same feed, none reads another's output.
 -- Commutativity is the one word that licenses parallelism and loadClaimer's
 -- free sorting. (JS: a loop that could be Promise.all.)
--- projectView v feed = asProjected <$> runConstruct (viewQuery v) (feedToDataset feed)
+--
+-- Law (chain within a view): a view's queries compose by 'chainConstructs',
+-- which does NOT commute. The two laws coexist because the chain never leaves
+-- the view: 'projectView' is still a function of the feed alone, so the fan-out
+-- stays commutative whatever any single view does internally.
+-- projectView v feed = asProjected <$> chainConstructs (viewQueries v) (feedToDataset feed)
 -- runViews vs feed   = traverse (\v -> (viewGraph v ,) <$> projectView v feed) vs
 projectView :: View -> ViewFeed c -> IO ProjectedSet
 runViews    :: [View] -> ViewFeed c -> IO [(Iri, ProjectedSet)]
 
 -- | Sequential CONSTRUCT pipeline — a DIFFERENT operation from a claimer's
 -- view fan-out, and the dichotomy has standard names: the fan-out is
--- 'traverse' in a commuting applicative ('runViews' below); the chain is the
+-- 'traverse' in a commuting applicative ('runViews' above); the chain is the
 -- Kleisli-composition monoid — order significant, step n+1 sees only step
--- n's output. Declared so the algebra names the use case; deliberately
--- unimplemented in the library — the CLI already covers it by piping
--- @rdf construct@ ('Construct' via ':>').
+-- n's output, so a step that wants to keep something re-emits it.
+--
+-- The CLI covers this by piping @rdf construct@ ('Construct' via ':>'); the
+-- library implements it too, because in-process there is no pipe and
+-- 'projectView' needs it.
 -- chainConstructs = foldr (\c k -> runConstruct c >=> k) pure
 chainConstructs :: [Construct] -> Dataset -> IO Dataset
 

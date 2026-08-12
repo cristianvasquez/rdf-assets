@@ -18,12 +18,21 @@
 import { Readable } from 'node:stream'
 import rdf from 'rdf-ext'
 import { claim } from './claim.js'
-import { materialize, construct } from './sparql.js'
+import { materialize, construct, chainConstructs } from './sparql.js'
 
-// view metadata predicate for the TriG claimer document 'loadClaimer' parses
+// view metadata predicates for the TriG claimer document 'loadClaimer' parses
 // (same urn:rdf-cli:* convention as scripts/manifest.js).
+//
+// cascade:query is one CONSTRUCT. cascade:queries is an RDF LIST of them, run
+// as a chain (spec/manifest.hs: 'chainConstructs') — order matters there, and
+// a list is the only thing in RDF that carries order, which is exactly why the
+// single-query form cannot just be repeated.
 const CLAIMER_NS = 'urn:rdf-cli:cascade#'
 const VIEW_QUERY = `${CLAIMER_NS}query`
+const VIEW_QUERIES = `${CLAIMER_NS}queries`
+const RDF_FIRST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#first'
+const RDF_REST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'
+const RDF_NIL = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'
 
 // Parse a claimer document: exactly ONE named graph (the claimer), holding
 // the shapes plus the views. Each view is a subject carrying a cascade:query
@@ -43,13 +52,33 @@ export function loadClaimer (quads, factory = rdf) {
   }
   const [graph] = graphs.values()
 
+  // Walk an RDF list of query literals, in list order.
+  const queryList = (head) => {
+    const out = []
+    let cell = head
+    while (cell && cell.value !== RDF_NIL) {
+      const first = all.find((q) => q.subject.equals(cell) && q.predicate.value === RDF_FIRST)
+      if (!first) throw new Error('a cascade:queries list cell is missing rdf:first')
+      out.push(first.object.value)
+      cell = all.find((q) => q.subject.equals(cell) && q.predicate.value === RDF_REST)?.object
+    }
+    return out
+  }
+
   const views = all.
-    filter((quad) => quad.predicate.value === VIEW_QUERY).
+    filter((quad) => quad.predicate.value === VIEW_QUERY ||
+      quad.predicate.value === VIEW_QUERIES).
     map((quad) => {
       if (quad.subject.termType !== 'NamedNode') {
         throw new Error('a view subject must be an IRI: it names the output graph')
       }
-      return { graph: quad.subject, query: quad.object.value }
+      const queries = quad.predicate.value === VIEW_QUERIES
+        ? queryList(quad.object)
+        : [quad.object.value]
+      if (queries.length === 0) {
+        throw new Error(`view ${quad.subject.value} declares an empty cascade:queries list`)
+      }
+      return { graph: quad.subject, queries }
     }).
     sort((left, right) => left.graph.value < right.graph.value ? -1 : 1)
 
@@ -73,16 +102,28 @@ export function frontierGraphOf (graphIri) {
 }
 
 // Fan-out law (spec 'projectView'): every view reads the SAME feed (owned
-// quads plus the borrowed frontier) — one materialization, independent
-// queries, each deduped into a dataset. An empty result means "this view
-// matched nothing"; the view still emits.
+// quads plus the borrowed frontier) — independent queries, each deduped into
+// a dataset. An empty result means "this view matched nothing"; the view
+// still emits.
+//
+// A view's own queries are a CHAIN (spec 'chainConstructs'): step n+1 sees
+// only step n's output. The two operations compose without either law giving
+// way — views still commute with each other, because the chain is contained
+// inside one view and never crosses to another.
+//
+// The single-query case keeps the shared materialization it always had; only
+// a chain pays for the extra stores its later steps need.
 async function runViews (views, feed, factory) {
   if (views.length === 0) return []
   const store = await materialize(feed)
   const results = []
   for (const view of views) {
+    const [first, ...rest] = view.queries
+    const output = rest.length === 0
+      ? construct(store, first)
+      : await chainConstructs(rest, construct(store, first))
     const quads = []
-    for await (const quad of construct(store, view.query)) {
+    for await (const quad of output) {
       quads.push(factory.quad(quad.subject, quad.predicate, quad.object))
     }
     results.push({ graph: view.graph, quads: factory.dataset(quads) })

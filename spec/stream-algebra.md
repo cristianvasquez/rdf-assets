@@ -82,6 +82,36 @@ rdf read ./data/**/*.ttl \
   | rdf pretty --format trig
 ```
 
+### Two ways to put CONSTRUCTs together
+
+The cascade above and a view's own queries are different operations, and the
+difference is which one *sees* the other's output:
+
+| | reads | order | use it for |
+|---|---|---|---|
+| cascade of claimers | the graphless rest left by the previous claimer | pipe order decides **ownership** precedence | several claimers competing for one wire |
+| fan-out across views | the same claimed feed, always | none — views commute | independent aspects of one claim |
+| chain within a view | only the previous step's output | significant | deriving something, then using it |
+
+A view declares a chain with `cascade:queries`, an RDF list — order matters, and
+a list is the only ordered structure RDF offers:
+
+```turtle
+<urn:example:view/diagram> cascade:queries (
+  "CONSTRUCT { ?s ?p ?o . ?t ex:short ?curie } WHERE { ... }"
+  "CONSTRUCT { ... } WHERE { ... ?t ex:short ?curie ... }"
+) .
+```
+
+Step n+1 sees **only** step n's output, so a step that wants to keep its input
+re-emits it — that is why the first query above constructs `?s ?p ?o` as well
+as the fact it derives.
+
+Reach for the chain when a rule would otherwise be repeated at every site that
+needs it. Reach for the cascade only when ownership actually changes hands: a
+second claimer re-runs the claim, which is wasted work if the same quads are
+simply being read again.
+
 ## Examples
 
 Read files directly:

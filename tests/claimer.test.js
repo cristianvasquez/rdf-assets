@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Readable } from 'node:stream'
 import rdf from 'rdf-ext'
 import {
   loadClaimer, applyClaimer, emitClaimer, sourceGraphOf, frontierGraphOf,
 } from '../src/transforms/claimer.js'
+import { chainConstructs } from '../src/transforms/sparql.js'
 
 const ns = (s) => rdf.namedNode(`http://example.org/${s}`)
 const SH = (s) => rdf.namedNode(`http://www.w3.org/ns/shacl#${s}`)
@@ -207,4 +209,151 @@ test('regression: two claimers over the same class both claim their content', as
   assert.equal(afterTimeline.claimed.size, 1, 'timeline still finds Person targets and owns born')
   assert.equal(afterTimeline.rest.size, 1, 'the shared type quad is owned by nobody')
   assert.ok([...afterTimeline.rest][0].predicate.equals(RDF_TYPE))
+})
+
+// ---------------------------------------------------------------------------
+// chainConstructs: the sequential operation, and how a view uses it.
+// The point of the chain is to derive something ONCE and then use it, instead
+// of repeating the derivation at every site that needs it. Its defining
+// property is the one that makes that safe: step n+1 sees only step n's
+// output, so what crosses a step boundary is exactly what was CONSTRUCTed.
+// ---------------------------------------------------------------------------
+
+const QUERIES = rdf.namedNode('urn:rdf-cli:cascade#queries')
+const RDF_FIRST = rdf.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#first')
+const RDF_REST = rdf.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#rest')
+const RDF_NIL = rdf.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#nil')
+
+/** An RDF list of query literals in `graph`, headed at `head`. */
+function queryList (head, queries, graph) {
+  const quads = []
+  queries.forEach((query, index) => {
+    const cell = index === 0 ? head : rdf.blankNode(`${head.value}-${index}`)
+    const next = index === queries.length - 1
+      ? RDF_NIL
+      : rdf.blankNode(`${head.value}-${index + 1}`)
+    quads.push(rdf.quad(cell, RDF_FIRST, rdf.literal(query), graph))
+    quads.push(rdf.quad(cell, RDF_REST, next, graph))
+  })
+  return quads
+}
+
+test('chainConstructs runs its steps in order, each over the last output', async () => {
+  const input = [rdf.quad(ns('a'), ns('one'), ns('b'))]
+  const out = await collect(await chainConstructs([
+    'CONSTRUCT { ?s <http://example.org/two> ?o } WHERE { ?s <http://example.org/one> ?o }',
+    'CONSTRUCT { ?s <http://example.org/three> ?o } WHERE { ?s <http://example.org/two> ?o }',
+  ], Readable.from(input, { objectMode: true })))
+
+  assert.equal(out.length, 1)
+  assert.ok(out[0].predicate.equals(ns('three')), 'the second step consumed the first step output')
+})
+
+test('a chain step sees ONLY the previous output, never the original input', async () => {
+  // The first step drops `one` by not re-emitting it. If the steps shared a
+  // feed, the second step would still find it.
+  const input = [rdf.quad(ns('a'), ns('one'), ns('b'))]
+  const out = await collect(await chainConstructs([
+    'CONSTRUCT { ?s <http://example.org/two> ?o } WHERE { ?s <http://example.org/one> ?o }',
+    'CONSTRUCT { ?s <http://example.org/kept> ?o } WHERE { ?s <http://example.org/one> ?o }',
+  ], Readable.from(input, { objectMode: true })))
+
+  assert.deepEqual(out, [], 'the original input is gone once a step declines to re-emit it')
+})
+
+test('a chain step keeps what it re-emits, which is how a derivation is used', async () => {
+  const input = [rdf.quad(ns('a'), ns('one'), ns('b'))]
+  const out = await collect(await chainConstructs([
+    `CONSTRUCT { ?s ?p ?o . ?s <http://example.org/derived> "yes" }
+     WHERE { ?s ?p ?o }`,
+    `CONSTRUCT { ?s <http://example.org/used> ?d }
+     WHERE { ?s <http://example.org/one> ?o . ?s <http://example.org/derived> ?d }`,
+  ], Readable.from(input, { objectMode: true })))
+
+  assert.equal(out.length, 1)
+  assert.ok(out[0].predicate.equals(ns('used')))
+  assert.equal(out[0].object.value, 'yes', 'step 2 joined the original data against step 1 derivation')
+})
+
+test('an empty chain is the identity', async () => {
+  const input = [rdf.quad(ns('a'), ns('one'), ns('b'))]
+  const out = await collect(await chainConstructs([], Readable.from(input, { objectMode: true })))
+  assert.equal(out.length, 1)
+  assert.ok(out[0].predicate.equals(ns('one')))
+})
+
+test('a view declares a chain with cascade:queries, in list order', async () => {
+  const g = ns('claimers/chained')
+  const view = ns('views/chained')
+  const claimer = loadClaimer([
+    rdf.quad(ns('PersonShape'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('PersonShape'), SH('targetClass'), ns('Person'), g),
+    rdf.quad(ns('PersonShape'), SH('property'), ns('p1'), g),
+    rdf.quad(ns('p1'), SH('path'), ns('name'), g),
+    rdf.quad(view, QUERIES, rdf.blankNode('list'), g),
+    ...queryList(rdf.blankNode('list'), [
+      `CONSTRUCT { ?s ?p ?o . ?s <http://example.org/shout> ?n }
+       WHERE { ?s ?p ?o . OPTIONAL { ?s <http://example.org/name> ?n } }`,
+      `CONSTRUCT { ?s <http://example.org/label> ?n }
+       WHERE { ?s <http://example.org/shout> ?n }`,
+    ], g),
+  ])
+
+  assert.equal(claimer.views.length, 1)
+  assert.equal(claimer.views[0].queries.length, 2, 'both list members survive as ordered queries')
+
+  const result = await applyClaimer({
+    inputQuads: [
+      rdf.quad(ns('alice'), RDF_TYPE, ns('Person')),
+      rdf.quad(ns('alice'), ns('name'), rdf.literal('Alice')),
+    ],
+    claimer,
+  })
+  const [projected] = result.views
+  assert.equal(projected.graph.value, view.value)
+  const labels = [...projected.quads].filter((q) => q.predicate.equals(ns('label')))
+  assert.equal(labels.length, 1, 'the second query ran over the first query output')
+  assert.equal(labels[0].object.value, 'Alice')
+})
+
+test('views still commute when one of them is a chain', async () => {
+  // The fan-out law must survive the chain: a view never sees another view's
+  // output, however many steps it has internally.
+  const g = ns('claimers/mixed')
+  const quads = [
+    rdf.quad(ns('PersonShape'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('PersonShape'), SH('targetClass'), ns('Person'), g),
+    rdf.quad(ns('PersonShape'), SH('property'), ns('p1'), g),
+    rdf.quad(ns('p1'), SH('path'), ns('name'), g),
+    rdf.quad(ns('views/plain'), QUERY, rdf.literal(
+      'CONSTRUCT { ?s <http://example.org/plain> ?o } WHERE { ?s <http://example.org/name> ?o }'), g),
+    rdf.quad(ns('views/chained'), QUERIES, rdf.blankNode('l'), g),
+    ...queryList(rdf.blankNode('l'), [
+      `CONSTRUCT { ?s <http://example.org/mid> ?o } WHERE { ?s <http://example.org/name> ?o }`,
+      `CONSTRUCT { ?s <http://example.org/end> ?o } WHERE { ?s <http://example.org/mid> ?o }`,
+    ], g),
+  ]
+  const result = await applyClaimer({
+    inputQuads: [
+      rdf.quad(ns('alice'), RDF_TYPE, ns('Person')),
+      rdf.quad(ns('alice'), ns('name'), rdf.literal('Alice')),
+    ],
+    claimer: loadClaimer(quads),
+  })
+
+  const byGraph = new Map(result.views.map((v) => [v.graph.value, [...v.quads]]))
+  assert.equal(byGraph.get(ns('views/plain').value).length, 1)
+  assert.equal(byGraph.get(ns('views/chained').value).length, 1)
+  // The chained view's intermediate `mid` must not leak into its own output,
+  // and neither view may see the other's predicates.
+  assert.ok(byGraph.get(ns('views/chained').value)[0].predicate.equals(ns('end')))
+  assert.ok(byGraph.get(ns('views/plain').value)[0].predicate.equals(ns('plain')))
+})
+
+test('an empty cascade:queries list is rejected rather than silently drawing nothing', () => {
+  const g = ns('claimers/empty')
+  assert.throws(() => loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/none'), QUERIES, RDF_NIL, g),
+  ]), /empty cascade:queries/)
 })
