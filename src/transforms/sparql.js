@@ -102,6 +102,12 @@ export function select (store, query) {
 //
 // Each step gets a fresh store because a step's output replaces its input; an
 // empty chain is the identity.
+//
+// Precondition: graphless input. Every step's WHERE runs against the default
+// graph and `construct` emits graphless, so a named-graph quad would be
+// dropped at the first step. Inside a claimer that holds by construction (the
+// working set is the graphless subset of the wire); a direct caller that has
+// named data pipes `dropGraph` first, the same rule claiming itself follows.
 export async function chainConstructs (queries, quads) {
   let current = quads
   for (const query of queries) {

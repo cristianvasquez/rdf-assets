@@ -1,8 +1,8 @@
 // One claimer per document, applied once per process — the cascade IS the
 // Unix pipe (spec/manifest.hs: 'Claimer', 'applyClaimer', 'emitClaimer').
 //
-// A claimer pairs one claim (SHACL shapes) with a fan-out of named views
-// (SPARQL CONSTRUCTs). Claimed/rest is marked by graph terms, reusing the
+// A claimer pairs one claim (SHACL shapes) with a fan-out of named views,
+// each of which is a CHAIN of SPARQL CONSTRUCTs (usually of length one). Claimed/rest is marked by graph terms, reusing the
 // graph policy: the working set is the GRAPHLESS subset of the incoming
 // stream; quads that already carry a named graph were claimed upstream and
 // pass through untouched; claiming moves OWNED quads out of graphless space
@@ -35,10 +35,14 @@ const RDF_REST = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#rest'
 const RDF_NIL = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'
 
 // Parse a claimer document: exactly ONE named graph (the claimer), holding
-// the shapes plus the views. Each view is a subject carrying a cascade:query
-// value; the subject IRI names the graph its output lands in. Views are
-// sorted by IRI — the fan-out is commutative, sorting only keeps the wire
-// deterministic.
+// the shapes plus the views. Each view is a subject carrying either a
+// cascade:query (one CONSTRUCT) or a cascade:queries list (a chain); the
+// subject IRI names the graph its output lands in. Views are sorted by IRI —
+// the fan-out is commutative, sorting only keeps the wire deterministic.
+//
+// A malformed document is rejected rather than half-read. Everything here is
+// authored by hand, so a silent truncation would show up much later as a
+// missing arrow in a drawing rather than as a parse error.
 export function loadClaimer (quads, factory = rdf) {
   const all = [...quads]
   const graphs = new Map()
@@ -52,18 +56,49 @@ export function loadClaimer (quads, factory = rdf) {
   }
   const [graph] = graphs.values()
 
-  // Walk an RDF list of query literals, in list order.
+  const objectsOf = (subject, predicate) => all.
+    filter((quad) => quad.subject.equals(subject) && quad.predicate.value === predicate).
+    map((quad) => quad.object)
+
+  // Walk an RDF list of query literals, in list order, collecting the cells
+  // themselves so they can be kept out of the shapes below. `seen` is what
+  // stops a cyclic rest-chain: without it the walk grows an array until V8
+  // refuses, several seconds later, with an error naming nothing useful.
   const queryList = (head) => {
-    const out = []
+    const queries = []
+    const cells = []
+    const seen = new Set()
     let cell = head
-    while (cell && cell.value !== RDF_NIL) {
-      const first = all.find((q) => q.subject.equals(cell) && q.predicate.value === RDF_FIRST)
-      if (!first) throw new Error('a cascade:queries list cell is missing rdf:first')
-      out.push(first.object.value)
-      cell = all.find((q) => q.subject.equals(cell) && q.predicate.value === RDF_REST)?.object
+    while (cell.value !== RDF_NIL) {
+      if (seen.has(cell.value)) {
+        throw new Error('a cascade:queries list is cyclic')
+      }
+      seen.add(cell.value)
+      cells.push(cell)
+
+      const first = objectsOf(cell, RDF_FIRST)
+      if (first.length !== 1) {
+        throw new Error(
+          `a cascade:queries list cell needs exactly one rdf:first; found ${first.length}`)
+      }
+      queries.push(first[0].value)
+
+      const rest = objectsOf(cell, RDF_REST)
+      if (rest.length !== 1) {
+        throw new Error(
+          `a cascade:queries list cell needs exactly one rdf:rest; found ${rest.length}`)
+      }
+      cell = rest[0]
     }
-    return out
+    return { queries, cells }
   }
+
+  // The list cells carry the query text, so they are claimer metadata just as
+  // much as the cascade:* predicates are — but they are spelled in rdf:, which
+  // the namespace filter below cannot see. Collect them here and exclude them
+  // explicitly, or multi-KB SPARQL literals end up in the dataset handed to
+  // the SHACL engine as if they were shapes.
+  const listCells = new Set()
 
   const views = all.
     filter((quad) => quad.predicate.value === VIEW_QUERY ||
@@ -72,18 +107,36 @@ export function loadClaimer (quads, factory = rdf) {
       if (quad.subject.termType !== 'NamedNode') {
         throw new Error('a view subject must be an IRI: it names the output graph')
       }
-      const queries = quad.predicate.value === VIEW_QUERIES
-        ? queryList(quad.object)
-        : [quad.object.value]
+      let queries
+      if (quad.predicate.value === VIEW_QUERIES) {
+        const walked = queryList(quad.object)
+        queries = walked.queries
+        for (const cell of walked.cells) listCells.add(cell.value)
+      } else {
+        queries = [quad.object.value]
+      }
       if (queries.length === 0) {
         throw new Error(`view ${quad.subject.value} declares an empty cascade:queries list`)
       }
       return { graph: quad.subject, queries }
     }).
-    sort((left, right) => left.graph.value < right.graph.value ? -1 : 1)
+    sort((left, right) => left.graph.value.localeCompare(right.graph.value))
+
+  // Two views writing the same graph would be silently merged by emitClaimer,
+  // and the sort could not order them. The usual cause is a subject carrying
+  // both cascade:query and cascade:queries.
+  const byGraph = new Set()
+  for (const view of views) {
+    if (byGraph.has(view.graph.value)) {
+      throw new Error(
+        `two views name the same output graph: ${view.graph.value}`)
+    }
+    byGraph.add(view.graph.value)
+  }
 
   const shapes = factory.dataset(all.
-    filter((quad) => !quad.predicate.value.startsWith(CLAIMER_NS)).
+    filter((quad) => !quad.predicate.value.startsWith(CLAIMER_NS) &&
+      !listCells.has(quad.subject.value)).
     map((quad) => factory.quad(quad.subject, quad.predicate, quad.object)))
 
   return { graph, shapes, views }

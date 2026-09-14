@@ -357,3 +357,68 @@ test('an empty cascade:queries list is rejected rather than silently drawing not
     rdf.quad(ns('views/none'), QUERIES, RDF_NIL, g),
   ]), /empty cascade:queries/)
 })
+
+test('a cyclic cascade:queries list is rejected, not walked forever', () => {
+  const g = ns('claimers/cyclic')
+  const head = rdf.blankNode('cyc')
+  assert.throws(() => loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/v'), QUERIES, head, g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('CONSTRUCT {} WHERE {}'), g),
+    rdf.quad(head, RDF_REST, head, g),
+  ]), /cyclic/)
+})
+
+test('a list cell missing rdf:rest is rejected rather than silently truncated', () => {
+  const g = ns('claimers/truncated')
+  const head = rdf.blankNode('t')
+  assert.throws(() => loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/v'), QUERIES, head, g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('CONSTRUCT {} WHERE {}'), g),
+  ]), /exactly one rdf:rest/)
+})
+
+test('a list cell with two rdf:first values is rejected, not resolved by luck', () => {
+  const g = ns('claimers/ambiguous')
+  const head = rdf.blankNode('a')
+  assert.throws(() => loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/v'), QUERIES, head, g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('A'), g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('B'), g),
+    rdf.quad(head, RDF_REST, RDF_NIL, g),
+  ]), /exactly one rdf:first/)
+})
+
+test('two views naming the same output graph are rejected', () => {
+  // The usual cause: one subject carrying both forms. emitClaimer would merge
+  // the two outputs into one graph with no way to tell them apart.
+  const g = ns('claimers/clash')
+  const head = rdf.blankNode('c')
+  assert.throws(() => loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/v'), QUERY, rdf.literal('CONSTRUCT {} WHERE {}'), g),
+    rdf.quad(ns('views/v'), QUERIES, head, g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('CONSTRUCT {} WHERE {}'), g),
+    rdf.quad(head, RDF_REST, RDF_NIL, g),
+  ]), /same output graph/)
+})
+
+test('the query list cells do not leak into the shapes', () => {
+  // cascade:* is stripped by namespace, but the list cells carrying the query
+  // text are spelled in rdf:, so they need excluding by identity. Otherwise
+  // multi-KB SPARQL literals reach the SHACL engine as if they were shapes.
+  const g = ns('claimers/clean')
+  const head = rdf.blankNode('q')
+  const claimer = loadClaimer([
+    rdf.quad(ns('S'), RDF_TYPE, SH('NodeShape'), g),
+    rdf.quad(ns('views/v'), QUERIES, head, g),
+    rdf.quad(head, RDF_FIRST, rdf.literal('CONSTRUCT {} WHERE {}'), g),
+    rdf.quad(head, RDF_REST, RDF_NIL, g),
+  ])
+  const predicates = [...claimer.shapes].map((q) => q.predicate.value)
+  assert.ok(!predicates.some((p) => p.endsWith('#first') || p.endsWith('#rest')),
+    `list cells leaked into the shapes: ${predicates.join(', ')}`)
+  assert.equal(claimer.shapes.size, 1, 'only the shape itself survives')
+})
