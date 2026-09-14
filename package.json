@@ -1,6 +1,6 @@
 {
   "name": "rdf-cli",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "RDF stream processing toolkit with a CLI and reusable pipeline components",
   "type": "module",
   "exports": {
