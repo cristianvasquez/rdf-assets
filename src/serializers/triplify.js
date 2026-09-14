@@ -52,20 +52,21 @@ export async function triplify (dataset, prefixes = {}) {
   if (namedGraphs.size === 0) return toTurtleString(dataset, prefixes)
 
   const prefixMap = prefixesToMap(prefixes)
-  let header = ''
+  const headerLines = new Set()
   const blocks = []
 
   if (defaultGraph.length) {
     const { header: h, body } = splitHeader(await serializeTriples(defaultGraph, prefixMap))
-    header ||= h
+    for (const line of h.split('\n')) if (line) headerLines.add(line)
     if (body) blocks.push(body)
   }
 
   for (const { graph, quads } of namedGraphs.values()) {
     const { header: h, body } = splitHeader(await serializeTriples(quads, prefixMap))
-    header ||= h
+    for (const line of h.split('\n')) if (line) headerLines.add(line)
     blocks.push(`${graphLabel(graph)} {\n${indent(body)}\n}`)
   }
 
+  const header = [...headerLines].join('\n')
   return `${[header, blocks.join('\n\n')].filter(Boolean).join('\n\n')}\n`
 }
